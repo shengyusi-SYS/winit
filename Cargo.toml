@@ -86,7 +86,7 @@ cfg_aliases = "0.2.1"
 [dependencies]
 bitflags = "2"
 cursor-icon = "1.1.0"
-dpi = { version = "0.1.1", path = "dpi" }
+dpi = "0.1.1"
 rwh_04 = { package = "raw-window-handle", version = "0.4", optional = true }
 rwh_05 = { package = "raw-window-handle", version = "0.5.2", features = [
     "std",
@@ -180,6 +180,9 @@ features = [
 [target.'cfg(target_os = "ios")'.dependencies.objc2-foundation]
 version = "0.2.2"
 features = [
+    "NSAttributedString",
+    "NSDictionary",
+    "NSValue",
     "block2",
     "dispatch",
     "NSArray",
@@ -189,9 +192,14 @@ features = [
     "NSOperation",
     "NSString",
     "NSProcessInfo",
+    "NSRunLoop",
     "NSThread",
     "NSSet",
 ]
+
+[target.'cfg(target_os = "ios")'.dependencies.objc2-quartz-core]
+version = "0.2.2"
+features = ["CADisplayLink", "CAFrameRateRange"]
 
 [target.'cfg(target_os = "ios")'.dependencies.objc2-ui-kit]
 version = "0.2.2"

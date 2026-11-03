@@ -2,6 +2,8 @@
 
 mod app_state;
 mod event_loop;
+mod display_link;
+mod ime;
 mod monitor;
 mod notification_center;
 mod view;
