@@ -95,12 +95,24 @@ pub trait ActiveEventLoopExtAndroid {
 
 /// Additional methods on [`Window`] that are specific to Android.
 pub trait WindowExtAndroid {
+    /// Pace requested redraws with native display callbacks (requires Android API 24).
+    ///
+    /// Disabled by default. Enable for display-paced rendering; disable when another
+    /// limiter owns pacing. Callbacks are one-shot and do not keep idle windows awake.
+    #[cfg(feature = "android-frame-pacing")]
+    fn set_native_frame_pacing(&self, enabled: bool);
+
     fn content_rect(&self) -> Rect;
 
     fn config(&self) -> ConfigurationRef;
 }
 
 impl WindowExtAndroid for Window {
+    #[cfg(feature = "android-frame-pacing")]
+    fn set_native_frame_pacing(&self, enabled: bool) {
+        self.window.set_native_frame_pacing(enabled);
+    }
+
     fn content_rect(&self) -> Rect {
         self.window.content_rect()
     }

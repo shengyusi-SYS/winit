@@ -25,6 +25,8 @@ use crate::window::{
     WindowButtons, WindowLevel,
 };
 
+#[cfg(feature = "android-frame-pacing")]
+mod frame_pacing;
 mod keycodes;
 
 pub(crate) use crate::cursor::{
@@ -112,11 +114,22 @@ impl SharedFlag {
 pub struct RedrawRequester {
     flag: SharedFlagSetter,
     waker: AndroidAppWaker,
+    #[cfg(feature = "android-frame-pacing")]
+    frame_pacing: Option<Arc<frame_pacing::State>>,
 }
 
 impl RedrawRequester {
-    fn new(flag: &SharedFlag, waker: AndroidAppWaker) -> Self {
-        RedrawRequester { flag: flag.setter(), waker }
+    fn new(
+        flag: &SharedFlag,
+        waker: AndroidAppWaker,
+        #[cfg(feature = "android-frame-pacing")] frame_pacing: Option<&frame_pacing::FramePacing>,
+    ) -> Self {
+        RedrawRequester {
+            flag: flag.setter(),
+            waker,
+            #[cfg(feature = "android-frame-pacing")]
+            frame_pacing: frame_pacing.map(|pacing| pacing.state.clone()),
+        }
     }
 
     pub fn request_redraw(&self) {
@@ -143,6 +156,8 @@ pub struct EventLoop<T: 'static> {
     cause: StartCause,
     ignore_volume_keys: bool,
     combining_accent: Option<char>,
+    #[cfg(feature = "android-frame-pacing")]
+    frame_pacing: Option<frame_pacing::FramePacing>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -168,6 +183,8 @@ impl<T: 'static> EventLoop<T> {
              Android",
         );
         let redraw_flag = SharedFlag::new();
+        #[cfg(feature = "android-frame-pacing")]
+        let frame_pacing = frame_pacing::FramePacing::new();
 
         Ok(Self {
             android_app: android_app.clone(),
@@ -179,6 +196,8 @@ impl<T: 'static> EventLoop<T> {
                     redraw_requester: RedrawRequester::new(
                         &redraw_flag,
                         android_app.create_waker(),
+                        #[cfg(feature = "android-frame-pacing")]
+                        frame_pacing.as_ref(),
                     ),
                 },
                 _marker: PhantomData,
@@ -192,6 +211,8 @@ impl<T: 'static> EventLoop<T> {
             cause: StartCause::Init,
             ignore_volume_keys: attributes.ignore_volume_keys,
             combining_accent: None,
+            #[cfg(feature = "android-frame-pacing")]
+            frame_pacing,
         })
     }
 
@@ -346,7 +367,11 @@ impl<T: 'static> EventLoop<T> {
             }
 
             pending_redraw |= self.redraw_flag.get_and_reset();
-            if pending_redraw {
+            let redraw_due = pending_redraw;
+            #[cfg(feature = "android-frame-pacing")]
+            let redraw_due =
+                redraw_due && self.frame_pacing.as_ref().map_or(true, |pacing| pacing.redraw_due());
+            if redraw_due {
                 pending_redraw = false;
                 let event = event::Event::WindowEvent {
                     window_id: window::WindowId(WindowId),
@@ -548,28 +573,31 @@ impl<T: 'static> EventLoop<T> {
 
         self.pending_redraw |= self.redraw_flag.get_and_reset();
 
-        timeout =
-            if self.running && (self.pending_redraw || self.user_events_receiver.has_incoming()) {
-                // If we already have work to do then we don't want to block on the next poll
-                Some(Duration::ZERO)
-            } else {
-                let control_flow_timeout = match self.control_flow() {
-                    ControlFlow::Wait => None,
-                    ControlFlow::Poll => Some(Duration::ZERO),
-                    ControlFlow::WaitUntil(wait_deadline) => {
-                        Some(wait_deadline.saturating_duration_since(start))
-                    },
-                };
-
-                min_timeout(control_flow_timeout, timeout)
+        let redraw_ready = self.pending_redraw;
+        #[cfg(feature = "android-frame-pacing")]
+        let redraw_ready =
+            redraw_ready && self.frame_pacing.as_ref().map_or(true, |pacing| pacing.ready());
+        timeout = if self.running && (redraw_ready || self.user_events_receiver.has_incoming()) {
+            // If we already have work to do then we don't want to block on the next poll
+            Some(Duration::ZERO)
+        } else {
+            let control_flow_timeout = match self.control_flow() {
+                ControlFlow::Wait => None,
+                ControlFlow::Poll => Some(Duration::ZERO),
+                ControlFlow::WaitUntil(wait_deadline) => {
+                    Some(wait_deadline.saturating_duration_since(start))
+                },
             };
+
+            min_timeout(control_flow_timeout, timeout)
+        };
 
         let app = self.android_app.clone(); // Don't borrow self as part of poll expression
         app.poll_events(timeout, |poll_event| {
             let mut main_event = None;
 
             match poll_event {
-                android_activity::PollEvent::Wake => {
+                android_activity::PollEvent::Wake | android_activity::PollEvent::Callback => {
                     // In the X11 backend it's noted that too many false-positive wake ups
                     // would cause the event loop to run continuously. They handle this by
                     // re-checking for pending events (assuming they cover all
@@ -780,6 +808,18 @@ pub(crate) struct Window {
 }
 
 impl Window {
+    #[cfg(feature = "android-frame-pacing")]
+    pub fn set_native_frame_pacing(&self, enabled: bool) {
+        if self
+            .redraw_requester
+            .frame_pacing
+            .as_ref()
+            .is_some_and(|state| state.set_enabled(enabled))
+        {
+            self.redraw_requester.request_redraw();
+        }
+    }
+
     pub(crate) fn new(
         el: &ActiveEventLoop,
         _window_attrs: window::WindowAttributes,
