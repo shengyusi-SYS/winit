@@ -610,6 +610,10 @@ impl<T: 'static> EventLoop<T> {
                     if !self.running
                         || (!self.pending_redraw && !self.user_events_receiver.has_incoming())
                     {
+                        #[cfg(feature = "android-frame-pacing")]
+                        if let Some(pacing) = &self.frame_pacing {
+                            pacing.discard_ready();
+                        }
                         return;
                     }
                 },

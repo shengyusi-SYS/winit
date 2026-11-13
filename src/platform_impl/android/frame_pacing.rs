@@ -40,23 +40,31 @@ impl FramePacing {
     pub(super) fn ready(&self) -> bool {
         !self.state.enabled.load(Ordering::Acquire) || self.state.ready.load(Ordering::Acquire)
     }
+    pub(super) fn discard_ready(&self) {
+        self.state.ready.store(false, Ordering::Release);
+    }
     pub(super) fn redraw_due(&self) -> bool {
         if !self.state.enabled.load(Ordering::Acquire) {
             return true;
         }
-        if self.state.ready.swap(false, Ordering::AcqRel) {
-            return true;
-        }
+        let due = self.state.ready.swap(false, Ordering::AcqRel);
+        // Register before dispatching the application update. Waiting for its
+        // next request can miss the next vsync's registration cutoff even when
+        // the frame itself fits within a refresh period.
+        self.request_frame();
+        due
+    }
+    fn request_frame(&self) {
         if !self.state.pending.swap(true, Ordering::AcqRel) {
             // The one-shot callback owns this Arc independently of the event loop.
-            // Only outstanding redraws schedule callbacks; idle does not rearm.
+            // An unused lookahead callback is discarded by the event loop and
+            // never rearms itself or updates an idle application.
             let data = Arc::into_raw(self.state.clone()).cast_mut().cast();
             // The legacy callback supports API 24; its 32-bit timestamp is unused.
             unsafe {
                 ndk_sys::AChoreographer_postFrameCallback(self.choreographer, Some(frame), data);
             }
         }
-        false
     }
 }
 unsafe extern "C" fn frame(_: std::os::raw::c_long, data: *mut std::ffi::c_void) {
